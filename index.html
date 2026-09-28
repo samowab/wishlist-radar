@@ -291,7 +291,7 @@
     return state.weeks[idx].rows.map(function(r){ return withLiveChange(r, prevMap, hasPrevWeek); });
   }
   function displayRows(idx){
-    return rowsWithLiveChange(idx).filter(function(r){ return r.rank <= 20 || r.actualWishlist != null; });
+    return rowsWithLiveChange(idx).filter(function(r){ return r.rank <= 20; });
   }
 
   function onWeeksUpdate(){
