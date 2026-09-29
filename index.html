@@ -84,12 +84,21 @@
     font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 999px;
     background: var(--surface-2); color: var(--text-muted); border: 1px solid var(--border);
   }
+  .toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
   .btn-ghost {
     border-radius: 8px; padding: 8px 14px; font-size: 13px; font-weight: 600; border: 1px solid var(--border);
-    background: transparent; color: var(--text-secondary);
+    background: transparent; color: var(--text-secondary); cursor: pointer;
   }
   .btn-ghost:hover { background: var(--surface-2); }
+
+  @media print {
+    .toolbar, #chartTooltip { display: none !important; }
+    body { background: #ffffff; color: #0b0b0b; padding: 0; }
+    .panel, .tile { box-shadow: none; border: 1px solid #ddd; break-inside: avoid; }
+    .app { max-width: 100%; gap: 14px; }
+    a { color: inherit; text-decoration: none; }
+  }
 
   .tiles { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
   .tile {
@@ -117,6 +126,8 @@
   td.num, th.num { text-align: right; font-family: 'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums; }
   tr:last-child td { border-bottom: none; }
   td.title-cell { font-weight: 500; max-width: 240px; overflow: hidden; text-overflow: ellipsis; }
+  td.title-cell a { color: inherit; text-decoration: none; border-bottom: 1px dotted var(--text-muted); }
+  td.title-cell a:hover { color: var(--accent); border-bottom-color: var(--accent); }
 
   .rank-badge { font-family: 'IBM Plex Mono', monospace; font-weight: 600; color: var(--text-secondary); }
   .pill {
@@ -180,6 +191,7 @@
     .topbar { flex-direction: column; align-items: stretch; }
   }
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 </head>
 <body>
 
@@ -192,7 +204,12 @@
         <p class="subtitle" id="lastUpdated">데이터를 불러오는 중…</p>
       </div>
     </div>
-    <span class="readonly-badge">읽기 전용 공개 페이지</span>
+    <div class="toolbar" id="pageToolbar">
+      <span class="readonly-badge">읽기 전용 공개 페이지</span>
+      <button class="btn-ghost" id="themeToggleBtn" aria-label="테마 전환" title="라이트/다크 모드 전환">🌓</button>
+      <button class="btn-ghost" id="saveImageBtn">이미지로 저장</button>
+      <button class="btn-ghost" id="savePdfBtn">PDF로 저장</button>
+    </div>
   </header>
 
   <section class="tiles" id="tiles">
@@ -234,7 +251,7 @@
     <div class="panel-head">
       <h2>위시리스트 추이</h2>
     </div>
-    <p class="chip-hint" style="margin-bottom:10px;">순위 기준 추이입니다 (위쪽일수록 상위권). 지금까지 랭킹에 들었던 모든 게임이 회색으로 표시되고, 탈락한 주 이후로는 선이 끊깁니다. 게임을 클릭하면 색으로 강조됩니다 (최대 5개)</p>
+    <p class="chip-hint" style="margin-bottom:10px;">순위 기준 추이입니다 (위쪽일수록 상위권). 지금까지 랭킹에 들었던 모든 게임이 회색으로 표시되고, 탈락한 주 이후로는 선이 끊깁니다. 🚀 표시가 있으면 랭킹 이탈이 아니라 정식 출시로 위시리스트가 구매로 전환된 것입니다. 게임을 클릭하면 색으로 강조됩니다 (최대 5개)</p>
     <div class="chip-row" id="gameChips"></div>
     <div class="chart-wrap" id="chartWrap">
       <svg id="trendChart" viewBox="0 0 860 380" preserveAspectRatio="xMidYMid meet"></svg>
@@ -253,6 +270,7 @@
 
   var state = {
     weeks: [],
+    releases: {},
     selectedWeekDate: null,
     pinned: []
   };
@@ -419,7 +437,7 @@
       return '<tr>' +
         '<td class="rank-badge">' + r.rank + '</td>' +
         '<td>' + changePillHtml(r) + '</td>' +
-        '<td class="title-cell">' + escapeHtml(r.title) + '</td>' +
+        '<td class="title-cell">' + (r.steamUrl ? '<a href="' + escapeHtml(r.steamUrl) + '" target="_blank" rel="noopener">' + escapeHtml(r.title) + '</a>' : escapeHtml(r.title)) + '</td>' +
         '<td class="num">' + fmtInt(r.followers) + '</td>' +
         '<td class="num"' + gainHeatStyle(r.followersChange, minGain, maxGain) + '>' + (r.followersChange!=null ? (r.followersChange>0?'+':'') + fmtInt(r.followersChange) : '–') + '</td>' +
         '<td class="num">' + multiplierCellHtml(r) + '</td>' +
@@ -520,7 +538,7 @@
         var row = w.rows.find(function(r){ return normTitle(r.title) === normTitle(title); });
         return { wi: wi, rank: row ? row.rank : null };
       });
-      return { title: title, pinned: pinIdx >= 0, color: pinIdx >= 0 ? css(SERIES_COLORS[pinIdx % SERIES_COLORS.length]) : null, pts: pts };
+      return { title: title, pinned: pinIdx >= 0, color: pinIdx >= 0 ? css(SERIES_COLORS[pinIdx % SERIES_COLORS.length]) : null, pts: pts, released: !!state.releases[normTitle(title)] };
     });
   }
 
@@ -592,6 +610,11 @@
       pathEl.setAttribute('stroke-width', style.width);
     }
 
+    function lastPointOf(s){
+      for(var i=s.pts.length-1;i>=0;i--){ if(s.pts[i].rank!=null) return s.pts[i]; }
+      return null;
+    }
+
     var unpinned = series.filter(function(s){ return !s.pinned; });
     var pinned = series.filter(function(s){ return s.pinned; });
     unpinned.forEach(function(s){
@@ -603,6 +626,12 @@
         svg.appendChild(pathEl);
         s.pathEls.push(pathEl);
       });
+      var ulp = lastPointOf(s);
+      if(ulp && ulp.wi < weeks.length-1 && s.released){
+        var rt = el('text', { x:xAt(ulp.wi), y:yAt(ulp.rank)+4, 'text-anchor':'middle', 'font-size':11, opacity:0.85 });
+        rt.textContent = '🚀';
+        svg.appendChild(rt);
+      }
     });
     pinned.forEach(function(s){
       s.pathEls = [];
@@ -613,12 +642,20 @@
         svg.appendChild(pathEl);
         s.pathEls.push(pathEl);
       });
-      var lastPt = null;
-      for(var i=s.pts.length-1;i>=0;i--){ if(s.pts[i].rank!=null){ lastPt = s.pts[i]; break; } }
+      var lastPt = lastPointOf(s);
       if(lastPt){
+        var ended = lastPt.wi < weeks.length-1;
         svg.appendChild(el('circle', { cx:xAt(lastPt.wi), cy:yAt(lastPt.rank), r:3.5, fill:s.color }));
-        var t2 = el('text', { x:xAt(lastPt.wi)+7, y:yAt(lastPt.rank)+4, 'font-size':11, fill:s.color, 'font-weight':600 });
-        t2.textContent = s.title.length>16 ? s.title.slice(0,15)+'…' : s.title;
+        var labelX = xAt(lastPt.wi)+7;
+        if(ended && s.released){
+          var rocket = el('text', { x:labelX, y:yAt(lastPt.rank)+4, 'font-size':11 });
+          rocket.textContent = '🚀';
+          svg.appendChild(rocket);
+          labelX += 13;
+        }
+        var t2 = el('text', { x:labelX, y:yAt(lastPt.rank)+4, 'font-size':11, fill:s.color, 'font-weight':600 });
+        var shortTitle = s.title.length>16 ? s.title.slice(0,15)+'…' : s.title;
+        t2.textContent = (ended && s.released) ? shortTitle + ' (출시)' : shortTitle;
         svg.appendChild(t2);
       }
     });
@@ -710,8 +747,56 @@
     renderNotesPanel();
   });
 
+  (function initTheme(){
+    var root = document.documentElement;
+    var btn = document.getElementById('themeToggleBtn');
+    var saved = null;
+    try { saved = localStorage.getItem('wishlistRadarTheme'); } catch(e){}
+    if(saved === 'light' || saved === 'dark') root.setAttribute('data-theme', saved);
+    function applyIcon(){
+      var cur = root.getAttribute('data-theme');
+      btn.textContent = cur === 'dark' ? '🌙' : (cur === 'light' ? '☀️' : '🌓');
+    }
+    applyIcon();
+    btn.addEventListener('click', function(){
+      var cur = root.getAttribute('data-theme');
+      var next = cur === 'light' ? 'dark' : (cur === 'dark' ? null : 'light');
+      if(next) root.setAttribute('data-theme', next); else root.removeAttribute('data-theme');
+      try {
+        if(next) localStorage.setItem('wishlistRadarTheme', next);
+        else localStorage.removeItem('wishlistRadarTheme');
+      } catch(e){}
+      applyIcon();
+    });
+  })();
+
+  document.getElementById('savePdfBtn').addEventListener('click', function(){
+    window.print();
+  });
+  document.getElementById('saveImageBtn').addEventListener('click', function(){
+    var btn = this;
+    if(typeof html2canvas === 'undefined'){ alert('이미지 저장 라이브러리를 불러오지 못했습니다.'); return; }
+    btn.disabled = true;
+    var label = btn.textContent;
+    btn.textContent = '캡처 중…';
+    var bg = getComputedStyle(document.body).backgroundColor;
+    html2canvas(document.querySelector('.app'), { backgroundColor: bg, scale: 2, useCORS: true }).then(function(canvas){
+      var link = document.createElement('a');
+      link.download = '위시리스트레이더_' + (state.selectedWeekDate || 'export') + '.png';
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    }).catch(function(err){
+      console.error(err);
+      alert('이미지 저장에 실패했습니다.');
+    }).finally(function(){
+      btn.disabled = false;
+      btn.textContent = label;
+    });
+  });
+
   fetch('data.json').then(function(r){ return r.json(); }).then(function(data){
     state.weeks = (data.weeks || []).slice().sort(function(a,b){ return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0); });
+    state.releases = data.releases || {};
     onWeeksUpdate();
   }).catch(function(err){
     document.getElementById('lastUpdated').textContent = '데이터를 불러오지 못했습니다.';
